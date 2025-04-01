@@ -23,18 +23,13 @@ export default function Detector() {
     const [isUploading, setIsUploading] = useState(false);
     const [lastClassification, setLastClassification] = useState(null);
     const [lastError, setLastError] = useState(null);
-    const [serverIp, setServerIp] = useState('192.168.1.10'); // UPDATE THIS AS NEEDED
-    const [serverUrl, setServerUrl] = useState(`http://${serverIp}:8000/classify/`);
+    const [serverUrl, setServerUrl] = useState(`http://kohicha.eastasia.cloudapp.azure.com:8000/classify/`);
     const [lastDetectionTime, setLastDetectionTime] = useState(null);
     const navigation = useNavigation();
     const [vibrationDuration, setVibrationDuration] = useState(500);
     const [fontSize, setFontSize] = useState(14);
     const [notificationPermission, setNotificationPermission] = useState(null);
 
-    // Update server URL when IP changes
-    useEffect(() => {
-        setServerUrl(`http://${serverIp}:8000/classify/`);
-    }, [serverIp]);
 
     // Initial Permission Request & Notification Setup
     useEffect(() => {
@@ -169,23 +164,51 @@ export default function Detector() {
         const filename = uri.split('/').pop();
         const fileType = Platform.OS === 'ios' ? 'audio/mp4' : 'audio/m4a';
         formData.append('file', { uri, name: filename || 'audio.m4a', type: fileType });
+
         try {
             const response = await fetch(serverUrl, { method: 'POST', body: formData });
-            if (!response.ok) {
-                let errTxt = `HTTP ${response.status}`;
-                try {
-                    const errJson = await response.json();
-                    errTxt = errJson.detail || errTxt;
-                } catch { }
-                throw new Error(errTxt);
-            }
-            const results = await response.json();
+            if (!response.ok) { let errTxt = `HTTP ${response.status}`; try {const errJson=await response.json(); errTxt = errJson.detail || errTxt;} catch{} throw new Error(errTxt); }
+            const results = await response.json(); // Expect { emergency_vehicle: x, car_horn: y, traffic: z }
             console.log('API Results:', results);
-            setLastClassification(results);
-            if (results.emergency_vehicle > 0 || results.car_horn > 0) {
-                console.log('ML Detection! Triggering notification...');
-                sendNotification(results);
+            setLastClassification(results); // Update UI state
+
+            // *** START: New Alert Logic (Replaces sendNotification call) ***
+            let alertTitle = null;
+            let alertMessage = null;
+
+            // Check for emergency vehicle first
+            if (results.emergency_vehicle > 0) {
+                alertTitle = "Emergency Vehicle Alert! 🚨"; // sirens emoji U+1F6A8
+                alertMessage = "Emergency vehicle detected nearby!";
             }
+            // Check for car horn (can happen alongside emergency)
+            else if (results.car_horn > 0) { // Use else if to only show one alert per interval, prioritizing emergency
+                alertTitle = "Car Horn Alert! 🔊"; // speaker emoji U+1F50A
+                alertMessage = "Car horn detected nearby!";
+            }
+
+            // If a relevant sound was detected, trigger debounced alert
+            if (alertTitle) {
+                const now = Date.now();
+                const DEBOUNCE_MS = 5000; // Only alert every 5 seconds max
+                if (lastDetectionTime && now - lastDetectionTime < DEBOUNCE_MS) {
+                    console.log(`Alert (${alertTitle}) debounced.`);
+                } else {
+                    setLastDetectionTime(now); // Update timestamp
+                    console.log(`ALERTING (Pop-up): ${alertTitle}`);
+
+                    // 1. Haptics
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                    // 2. Vibration
+                    Vibration.vibrate(vibrationDuration); // Use duration from state
+                    // 3. Pop-up Alert
+                    Alert.alert(alertTitle, alertMessage);
+                    // 4. Optional Push Notification (Removed for simplicity as requested pop-up)
+                    // try { Notifications.scheduleNotificationAsync({ content: { title: alertTitle, body: alertMessage }, trigger: null }); } catch(e) {console.error("Push failed:", e)}
+                }
+            }
+            // *** END: New Alert Logic ***
+
         } catch (error) {
             console.error('Upload/Classify Error:', error);
             setLastError(error.message || 'Upload/Classification failed');
@@ -321,17 +344,7 @@ export default function Detector() {
                 <Ionicons name="arrow-back" size={24} color="white" />
             </TouchableOpacity>
             <View className='content' style={styles.content}>
-                <Text className='text-white font-bold' style={dynamicStyles.label}>SafeSignRoad PoC (Interval)</Text>
-
-                <Text className='text-white font-bold' style={dynamicStyles.label}>Server IP:</Text>
-                <TextInput
-                    className='text-white font-bold'
-                    style={dynamicStyles.input}
-                    value={serverIp}
-                    onChangeText={setServerIp}
-                    editable={!isListening}
-                    keyboardType="numeric"
-                />
+                <Text className='text-white font-bold' style={dynamicStyles.label}>SafeSignRoad Proof-Of-Concept</Text>
 
                 <Text className='text-white font-bold' style={dynamicStyles.label}>Permission: {permissionResponse?.status ?? 'loading...'}</Text>
                 <Text className='text-white font-bold' style={dynamicStyles.label}>Monitoring: {isListening ? 'ACTIVE' : 'OFF'}</Text>
@@ -348,8 +361,6 @@ export default function Detector() {
                 </View>
 
                 {isUploading && <ActivityIndicator size="small" color="#0000ff" style={{ marginVertical: 5 }} />}
-                {lastError && <Text className='text-white font-bold' style={styles.errorText}>Last Error: {lastError}</Text>}
-
                 {lastClassification && (
                     <View style={styles.resultsContainer}>
                         <Text className='text-white font-bold' style={dynamicStyles.label}>Last Classification:</Text>
