@@ -1,278 +1,314 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, Alert, ActivityIndicator, TextInput, Platform, TouchableOpacity, Vibration } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { StyleSheet, Text, View, Button, Alert, Platform, ActivityIndicator, TextInput, Vibration, ScrollView } from 'react-native';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import * as Notifications from 'expo-notifications';
-import { Ionicons } from "@expo/vector-icons";
-import { useNavigation } from '@react-navigation/native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 Notifications.setNotificationHandler({
     handleNotification: async () => ({
         shouldShowAlert: true,
         shouldPlaySound: true,
-        shouldSetBadge: true,
+        shouldSetBadge: false,
     }),
 });
 
-export default function Index() {
-    const [recording, setRecording] = useState(null);
-    const [isRecording, setIsRecording] = useState(false);
+export default function Detector() {
     const [permissionResponse, requestPermission] = Audio.usePermissions();
-    const [notificationPermission, setNotificationPermission] = useState(null);
-
-    const [recordedUri, setRecordedUri] = useState(null);
-    const [isProcessing, setIsProcessing] = useState(false);
-    const [classificationResult, setClassificationResult] = useState(null);
-    const [serverIp, setServerIp] = useState('192.168.1.15');
+    const recordingRef = useRef(null);
+    const [isListening, setIsListening] = useState(false);
+    const [isRecording, setIsRecording] = useState(false);
+    const [isUploading, setIsUploading] = useState(false);
+    const [lastClassification, setLastClassification] = useState(null);
+    const [lastError, setLastError] = useState(null);
+    const [serverIp, setServerIp] = useState('192.168.1.10'); // UPDATE THIS AS NEEDED
     const [serverUrl, setServerUrl] = useState(`http://${serverIp}:8000/classify/`);
-    const [vibrationDuration, setVibrationDuration] = useState(500);
-    const [fontSize, setFontSize] = useState(14); // Add state for font size
-    const navigation = useNavigation();
+    const [lastDetectionTime, setLastDetectionTime] = useState(null);
 
+    // Update server URL when IP changes
     useEffect(() => {
         setServerUrl(`http://${serverIp}:8000/classify/`);
     }, [serverIp]);
 
+    // Initial Permission Request & Notification Setup
     useEffect(() => {
-        const loadSettings = async () => {
-            try {
-                // Load vibration settings
-                const storedVibration = await AsyncStorage.getItem("vibrationDuration");
-                if (storedVibration !== null) {
-                    const parsedVibration = Number.parseInt(storedVibration, 10);
-                    setVibrationDuration(parsedVibration);
-                }
-
-                // Load font size settings
-                const storedFontSize = await AsyncStorage.getItem("fontSize");
-                if (storedFontSize !== null) {
-                    const parsedFontSize = Number.parseInt(storedFontSize, 10);
-                    setFontSize(parsedFontSize);
-                }
-            } catch (error) {
-                console.error("Error loading settings:", error);
-            }
-        };
-
-        loadSettings();
+        requestPermission();
+        registerForPushNotificationsAsync();
     }, []);
 
-    useEffect(() => {
-        const requestNotificationPermissions = async () => {
-            const currentPermission = await Notifications.getPermissionsAsync();
-            setNotificationPermission(currentPermission);
-
-            if (currentPermission.status !== 'granted') {
-                const permissionResult = await Notifications.requestPermissionsAsync();
-                setNotificationPermission(permissionResult);
-
-                if (permissionResult.status !== 'granted') {
-                    Alert.alert('Permission Required', 'Push notification permission is needed for alerts.');
-                }
-            }
-        };
-
-        requestNotificationPermissions();
-    }, []);
-
-    async function startRecording() {
-        let currentPermission = permissionResponse;
-
+    const setupAudioMode = async () => {
         try {
-            if (currentPermission?.status !== 'granted') {
-                currentPermission = await requestPermission();
-                if (currentPermission.status !== 'granted') {
-                    Alert.alert('Permission Required', 'Microphone permission is needed to record.');
-                    return;
-                }
-            }
+            await Audio.setAudioModeAsync({ allowsRecordingIOS: true });
+            console.log("Audio mode set.");
+            return true;
+        } catch (err) {
+            console.error("Failed to set audio mode", err);
+            setLastError("Audio mode setup failed");
+            return false;
+        }
+    };
 
-            if (recording) {
-                await recording.stopAndUnloadAsync();
-                setRecording(null);
-            }
+    const startNewRecording = async () => {
+        if (recordingRef.current) {
+            console.warn("Cleaning up previous recording...");
+            try { await recordingRef.current.stopAndUnloadAsync(); } catch {}
+            recordingRef.current = null;
+        }
+        let newRecording = null;
+        try {
+            if (permissionResponse?.status !== 'granted') { throw new Error("Microphone permission not granted."); }
+            if (!await setupAudioMode()) { throw new Error("Audio mode setup failed."); }
+
+            console.log('Creating recording instance...');
+            const { recording: recordingObject } = await Audio.Recording.createAsync(
+                Audio.RecordingOptionsPresets.HIGH_QUALITY
+            );
+            newRecording = recordingObject;
+            if (!newRecording) throw new Error("Failed to create recording object.");
+            recordingRef.current = newRecording;
+            console.log("Recording object created.");
 
             setIsRecording(true);
-            setRecordedUri(null);
-            setClassificationResult(null);
+            setLastError(null);
 
-            await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-
-            const newRecording = new Audio.Recording();
-            await newRecording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+            console.log('Attempting recording start...');
             await newRecording.startAsync();
-
-            setRecording(newRecording);
+            console.log('Recording started.');
+            return true;
         } catch (err) {
-            Alert.alert('Error', `Failed to start recording: ${err.message || 'Unknown error'}`);
-            setIsRecording(false);
-            setRecording(null);
+            console.error("Error in startNewRecording:", err);
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            const knownError = "Start encountered an error: recording not started";
+            if (errorMessage === knownError) {
+                console.warn(`Known error '${knownError}', proceeding tentatively...`);
+                setLastError(`Warn: ${knownError} (Tentative)`);
+                if (!isRecording) setIsRecording(true);
+                return true;
+            } else {
+                setLastError(`Start Error: ${errorMessage}`);
+                setIsRecording(false);
+                recordingRef.current = null;
+                return false;
+            }
         }
-    }
+    };
 
-    async function stopRecording() {
-        if (!recording) return;
-
-        setIsProcessing(true);
-
+    const stopCurrentRecording = async () => {
+        if (!recordingRef.current) return null;
+        console.log("Stopping recording...");
+        let uri = null;
+        const recordingObjToStop = recordingRef.current;
+        recordingRef.current = null;
+        setIsRecording(false);
         try {
-            await recording.stopAndUnloadAsync();
-            const uri = recording.getURI();
-            setRecordedUri(uri);
-            setRecording(null);
-            await uploadAndClassify(uri);
-        } catch (err) {
-            Alert.alert('Error', `Failed to stop recording: ${err.message || 'Unknown error'}`);
-        } finally {
-            setIsRecording(false);
+            await recordingObjToStop.stopAndUnloadAsync();
+            uri = recordingObjToStop.getURI();
+            console.log(`Stopped successfully. URI: ${uri}`);
+            setLastError(null);
+        } catch (error) {
+            console.error("Failed to stop/unload:", error);
+            setLastError(`Stop Error: ${error.message || 'Unknown'}`);
         }
-    }
+        return uri;
+    };
 
     async function uploadAndClassify(uri) {
+        if (!uri) return;
+        setIsUploading(true);
+        setLastError(null);
+        console.log(`Uploading ${uri}...`);
         const formData = new FormData();
         const filename = uri.split('/').pop();
         const fileType = Platform.OS === 'ios' ? 'audio/mp4' : 'audio/m4a';
-
-        formData.append('file', {
-            uri: uri,
-            name: filename || 'audio.m4a',
-            type: fileType,
-        });
-
+        formData.append('file', { uri, name: filename || 'audio.m4a', type: fileType });
         try {
-            const response = await fetch(serverUrl, {
-                method: 'POST',
-                body: formData,
-            });
-
+            const response = await fetch(serverUrl, { method: 'POST', body: formData });
             if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+                let errTxt = `HTTP ${response.status}`;
+                try {
+                    const errJson = await response.json();
+                    errTxt = errJson.detail || errTxt;
+                } catch {}
+                throw new Error(errTxt);
             }
-
             const results = await response.json();
-            setClassificationResult(results);
-
-            if (results && Object.keys(results).length > 0) {
-                notifyUser(results);
+            console.log('API Results:', results);
+            setLastClassification(results);
+            if (results.emergency_vehicle > 0 || results.car_horn > 0) {
+                console.log('ML Detection! Triggering notification...');
+                sendNotification(results);
             }
         } catch (error) {
-            Alert.alert('API Error', `Failed to classify audio: ${error.message}`);
-            setClassificationResult({ error: error.message });
+            console.error('Upload/Classify Error:', error);
+            setLastError(error.message || 'Upload/Classification failed');
+            setLastClassification(null);
         } finally {
-            setIsProcessing(false);
+            setIsUploading(false);
         }
     }
 
-    async function schedulePushNotification(title, body) {
-        if (notificationPermission?.status !== 'granted') {
-            console.log("No notification permission, skipping push notification");
+    async function sendNotification(results = null) {
+        const now = Date.now();
+        if (lastDetectionTime && now - lastDetectionTime < 5000) {
+            console.log("Notification debounced.");
             return;
         }
-
-        await Notifications.scheduleNotificationAsync({
-            content: {
-                title: title,
-                body: body,
-                sound: true,
-                priority: Notifications.AndroidNotificationPriority.HIGH,
-            },
-            trigger: null,
-        });
+        setLastDetectionTime(now);
+        console.log(`🚨 Critical Sound DETECTED by ML!`);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        Vibration.vibrate(500);
+        try {
+            await Notifications.scheduleNotificationAsync({
+                content: {
+                    title: "Sound Alert",
+                    body: "Emergency vehicle or horn detected!",
+                },
+                trigger: null,
+            });
+            console.log("Push notification scheduled.");
+        } catch (e) {
+            console.error("Failed to schedule push notification:", e);
+        }
     }
 
-    async function notifyUser(results) {
-        const detectedClasses = Object.entries(results)
-            .map(([key, value]) => `${key}: ${value}`)
-            .join('\n');
+    async function registerForPushNotificationsAsync() {
+        try {
+            const { status } = await Notifications.requestPermissionsAsync({
+                ios: {
+                    allowAlert: true,
+                    allowBadge: true,
+                    allowSound: true,
+                },
+            });
+            if (status !== 'granted') {
+                Alert.alert('Permission required', 'Enable notifications in settings.');
+            }
+        } catch (error) {
+            console.error("Notification permission error:", error);
+        }
+    }
 
-        Alert.alert('Detection Alert', `Detected:\n${detectedClasses}`);
+    // --- Interval Management ---
 
-        if (vibrationDuration > 0) {
-            Vibration.vibrate(vibrationDuration);
-            console.log(`Vibrating for ${vibrationDuration}ms`);
+    useEffect(() => {
+        let intervalId = null;
+        let isEffectActive = true;
+        const RECORDING_DURATION_MS = 5000;
+        const INTERVAL_MS = RECORDING_DURATION_MS + 200;
+
+        const handleIntervalTick = async () => {
+            if (!isEffectActive || !isListening) return;
+            console.log("--- Interval Tick ---");
+            const uri = await stopCurrentRecording();
+            if (isListening && isEffectActive) {
+                const startSuccess = await startNewRecording();
+                if (uri && startSuccess && !isUploading) {
+                    uploadAndClassify(uri);
+                } else if (uri && isUploading) {
+                    console.warn("Skipping upload: previous processing.");
+                }
+            }
+            console.log("--- Interval Cycle End ---");
+        };
+
+        const startMonitoringSequence = async () => {
+            if (!isEffectActive) return;
+            console.log("Starting monitoring sequence...");
+            setLastError(null);
+            setLastClassification(null);
+            if (permissionResponse?.status !== 'granted') {
+                Alert.alert("Permission Denied", "Microphone permission required.");
+                setIsListening(false);
+                return;
+            }
+            const firstStartSuccess = await startNewRecording();
+            if (isEffectActive && isListening && firstStartSuccess) {
+                if (intervalId) clearInterval(intervalId);
+                intervalId = setInterval(handleIntervalTick, INTERVAL_MS);
+                console.log(`Interval set (${INTERVAL_MS}ms)`);
+            } else if (isEffectActive && isListening && !firstStartSuccess) {
+                setIsListening(false);
+            }
+        };
+
+        if (isListening) {
+            startMonitoringSequence();
         }
 
-        Vibration.vibrate(vibrationDuration);
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        return () => {
+            console.log("Cleanup: stopping monitoring...");
+            isEffectActive = false;
+            if (intervalId) {
+                clearInterval(intervalId);
+                console.log("Interval cleared.");
+            }
+            if (recordingRef.current) {
+                recordingRef.current.stopAndUnloadAsync()
+                    .catch(e => console.error("Cleanup unload failed:", e))
+                    .finally(() => { recordingRef.current = null; });
+            }
+            setIsRecording(false);
+            setIsUploading(false);
+        };
+    }, [isListening]);
 
-        let highestItem = Object.entries(results).reduce(
-            (max, current) => current[1] > max[1] ? current : max,
-            ['', 0]
-        );
-
-        await schedulePushNotification(
-            'SafeSignRoad Alert',
-            `Detected: ${highestItem[0]} (${highestItem[1]})`
-        );
-
-        Vibration.vibrate(vibrationDuration);
-    }
-
-    // Generate dynamic styles based on font size
-    const dynamicStyles = {
-        title: { fontSize: fontSize + 8, fontWeight: 'bold', color: 'white', marginBottom: 10 },
-        label: { fontSize: fontSize + 2, color: 'white', marginBottom: 5 },
-        input: { borderWidth: 1, borderColor: 'gray', padding: 10, width: 250, borderRadius: 5, color: 'white', marginBottom: 10, fontSize },
-        status: { fontSize: fontSize + 2, color: 'white', marginBottom: 20 },
-        buttonText: { fontSize: fontSize + 2, fontWeight: 'bold', color: 'black' },
-        resultsTitle: { fontSize: fontSize + 4, fontWeight: 'bold', color: 'white', marginBottom: 10, textAlign: 'center' },
-        resultText: { fontSize: fontSize + 2, color: 'white' },
-        errorText: { color: 'red', fontSize: fontSize + 2 },
-    };
+    const toggleListening = () => setIsListening(current => !current);
 
     return (
-        <View style={styles.container}>
-            <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-                <Ionicons name="arrow-back" size={24} color="white" />
-            </TouchableOpacity>
+        <ScrollView contentContainerStyle={styles.container}>
+            <Text style={styles.title}>SafeSignRoad PoC (Interval)</Text>
 
-            <View style={styles.content}>
-                <Text style={dynamicStyles.title}>SafeSignRoad PoC (JS)</Text>
-                <Text style={dynamicStyles.label}>Enter Server IP:</Text>
+            <Text style={styles.label}>Server IP:</Text>
+            <TextInput
+                style={styles.input}
+                value={serverIp}
+                onChangeText={setServerIp}
+                editable={!isListening}
+                keyboardType="numeric"
+            />
 
-                <TextInput
-                    style={dynamicStyles.input}
-                    value={serverIp}
-                    onChangeText={setServerIp}
-                    placeholder="Enter server IP"
-                    keyboardType="numeric"
-                    placeholderTextColor="gray"
+            <Text style={styles.statusText}>Permission: {permissionResponse?.status ?? 'loading...'}</Text>
+            <Text style={styles.statusText}>Monitoring: {isListening ? 'ACTIVE' : 'OFF'}</Text>
+            <Text style={styles.statusText}>Recording: {isRecording ? 'Recording...' : 'Stopped'}</Text>
+            <Text style={styles.statusText}>API: {isUploading ? 'Classifying...' : 'Ready'}</Text>
+
+            <View style={styles.buttonContainer}>
+                <Button
+                    title={isListening ? "Stop Monitoring" : "Start Monitoring"}
+                    onPress={toggleListening}
+                    color={isListening ? "#F44336" : "#4CAF50"}
+                    disabled={permissionResponse?.status !== 'granted'}
                 />
-
-                <Text style={dynamicStyles.status}>Status: {isRecording ? 'RECORDING' : (isProcessing ? 'Processing...' : 'Idle')}</Text>
-
-                <TouchableOpacity style={styles.button} onPress={startRecording} disabled={isRecording || isProcessing}>
-                    <Text style={dynamicStyles.buttonText}>Start Recording</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity style={styles.button} onPress={stopRecording} disabled={!isRecording}>
-                    <Text style={dynamicStyles.buttonText}>Stop Recording & Classify</Text>
-                </TouchableOpacity>
-
-                {isProcessing && <ActivityIndicator size="large" color="white" />}
-
-                {classificationResult && !isProcessing && (
-                    <View style={styles.resultsContainer}>
-                        <Text style={dynamicStyles.resultsTitle}>Classification Results:</Text>
-                        {classificationResult.error ? (
-                            <Text style={dynamicStyles.errorText}>Error: {classificationResult.error}</Text>
-                        ) : (
-                            Object.entries(classificationResult).map(([key, value]) => (
-                                <Text key={key} style={dynamicStyles.resultText}>{key}: {value}</Text>
-                            ))
-                        )}
-                    </View>
-                )}
             </View>
-        </View>
+
+            {isUploading && <ActivityIndicator size="small" color="#0000ff" style={{ marginVertical: 5 }} />}
+            {lastError && <Text style={styles.errorText}>Last Error: {lastError}</Text>}
+
+            {lastClassification && (
+                <View style={styles.resultsContainer}>
+                    <Text style={styles.resultsTitle}>Last Classification:</Text>
+                    {Object.keys(lastClassification)
+                        .filter(key => key !== 'error')
+                        .map((key) => (
+                            <Text style={styles.resultText} key={key}>
+                                {key}: {lastClassification[key]}
+                            </Text>
+                        ))
+                    }
+                </View>
+            )}
+        </ScrollView>
     );
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#023c69', padding: 20 },
-    backButton: { marginTop: 20, padding: 10 },
-    content: { alignItems: 'center', marginTop: 50 },
-    button: { backgroundColor: '#fbd713', padding: 15, borderRadius: 8, width: 250, alignItems: 'center', marginBottom: 10 },
-    resultsContainer: { marginTop: 20, padding: 15, borderWidth: 1, borderColor: 'gray', borderRadius: 5, width: '90%' },
+    container: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 20, backgroundColor: '#f0f0f0' },
+    title: { fontSize: 20, fontWeight: 'bold', marginBottom: 15 },
+    label: { color: '#333', fontSize: 12, marginTop: 10 },
+    input: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#ccc', padding: 10, width: '80%', marginVertical: 5, borderRadius: 5, textAlign: 'center' },
+    statusText: { fontSize: 14, marginVertical: 2 },
+    buttonContainer: { width: '80%', marginVertical: 20 },
+    resultsContainer: { marginTop: 15, padding: 10, backgroundColor: '#e9e9e9', borderRadius: 5, width: '90%', alignItems: 'center' },
+    resultsTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 5, textAlign: 'center' },
+    resultText: { fontSize: 14, textAlign: 'center' },
+    errorText: { color: 'red', marginTop: 10, width: '90%', textAlign: 'center', fontStyle: 'italic' },
 });
