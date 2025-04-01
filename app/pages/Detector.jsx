@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, Button, Alert, ActivityIndicator, TextInput, Platform } from 'react-native';
+import { StyleSheet, Text, View, Button, Alert, ActivityIndicator, TextInput, Platform, TouchableOpacity } from 'react-native';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
-
+import { Ionicons } from "@expo/vector-icons"
+import { useNavigation } from '@react-navigation/native';
 export default function Index() {
     const [recording, setRecording] = useState(null);
     const [isRecording, setIsRecording] = useState(false);
@@ -12,7 +13,7 @@ export default function Index() {
     const [classificationResult, setClassificationResult] = useState(null);
     const [serverIp, setServerIp] = useState('192.168.1.15');
     const [serverUrl, setServerUrl] = useState(`http://${serverIp}:8000/classify/`);
-
+    const navigation = useNavigation();
     useEffect(() => {
         setServerUrl(`http://${serverIp}:8000/classify/`);
     }, [serverIp]);
@@ -38,7 +39,7 @@ export default function Index() {
             setRecordedUri(null);
             setClassificationResult(null);
 
-            await Audio.setAudioModeAsync({ allowsRecordingIOS: true });
+            await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
 
             const newRecording = new Audio.Recording();
             await newRecording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
@@ -46,7 +47,7 @@ export default function Index() {
 
             setRecording(newRecording);
         } catch (err) {
-            Alert.alert('Error', `Failed to start recording: ${err.message || 'Unknown error'}`);
+            Alert.alert('Error', `Failed to start recording: ${err.message || 'Unknown error'} `);
             setIsRecording(false);
             setRecording(null);
         }
@@ -102,35 +103,59 @@ export default function Index() {
     }
 
     return (
-        <View style={styles.container}>
-            <Text style={styles.title}>SafeSignRoad PoC (JS)</Text>
-            <Text>Enter Server IP:</Text>
-            <TextInput
-                style={styles.input}
-                value={serverIp}
-                onChangeText={setServerIp}
-                placeholder="Enter server IP"
-                keyboardType="numeric"
-            />
-            <Text>Status: {isRecording ? 'RECORDING' : (isProcessing ? 'Processing...' : 'Idle')}</Text>
-            <View style={styles.buttonContainer}>
-                <Button title="Start Recording" onPress={startRecording} disabled={isRecording || isProcessing} color="green" />
-                <Button title="Stop Recording & Classify" onPress={stopRecording} disabled={!isRecording} color="red" />
-            </View>
-            {isProcessing && <ActivityIndicator size="large" color="#0000ff" />}
-            {classificationResult && !isProcessing && (
-                <View style={styles.resultsContainer}>
-                    <Text style={styles.resultsTitle}>Classification Results:</Text>
-                    {classificationResult.error ? (
-                        <Text style={styles.errorText}>Error: {classificationResult.error}</Text>
-                    ) : (
-                        Object.entries(classificationResult).map(([key, value]) => (
-                            <Text key={key}>{key}: {value}</Text>
-                        ))
+        <View className="flex-1 p-4 bg-[#023c69]" >
+
+            <TouchableOpacity className="p-2 mt-6" onPress={() => navigation.goBack()}>
+                <Ionicons name="arrow-back" size={24} color="white" />
+            </TouchableOpacity>
+
+            <View className="items-center justify-center mt-20">
+                <View className="flex items-center justify-start mb-4 ">
+                    <Text className='text-white font-bold' style={styles.title}>SafeSignRoad PoC (JS)</Text>
+                    <Text className='text-white font-bold'>Enter Server IP:</Text>
+
+                </View>
+
+                <TextInput
+                    className="border border-gray-300 rounded p-2 w-[300px] mb-4 text-white"
+                    value={serverIp}
+                    onChangeText={setServerIp}
+                    placeholder="Enter server IP"
+                    keyboardType="numeric"
+                />
+                <Text className='text-white font-bold'>Status: {isRecording ? 'RECORDING' : (isProcessing ? 'Processing...' : 'Idle')}</Text>
+                <View className="flex-col gap-2 mt-4 mb-2">
+
+                    < TouchableOpacity className="bg-[#fbd713]  rounded-lg py-4 px-6 flex-row items-center justify-center min-w-[250px]" title="Start Recording" onPress={startRecording} disabled={isRecording || isProcessing} color="green" >
+                        <Text className='font-bold text-black'>Start Recording</Text>
+                    </TouchableOpacity>
+
+                    < TouchableOpacity className="bg-[#fbd713]  rounded-lg py-4 px-6 flex-row items-center justify-center min-w-[250px]"
+                        title="Stop Recording & Classify" onPress={stopRecording} disabled={!isRecording} color="red" >
+                        <Text className='font-bold text-black'>Stop Recordind & Classify</Text>
+                    </TouchableOpacity>
+
+                </View>
+
+                <View className='mt-4'>
+                    {isProcessing && <ActivityIndicator size="large" color="white" />}
+                    {classificationResult && !isProcessing && (
+                        <View style={styles.resultsContainer}>
+                            <Text className='text-white font-bold' style={styles.resultsTitle}>Classification Results:</Text>
+                            {classificationResult.error ? (
+                                <Text className='text-white font-bold' style={styles.errorText}>Error: {classificationResult.error}</Text>
+                            ) : (
+                                Object.entries(classificationResult).map(([key, value]) => (
+                                    <Text className='text-white font-bold' key={key}>{key}: {value}</Text>
+                                ))
+                            )}
+                        </View>
                     )}
                 </View>
-            )}
-        </View>
+
+
+            </View>
+        </View >
     );
 }
 
