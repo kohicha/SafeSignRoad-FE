@@ -52,7 +52,6 @@ const SettingsScreen = () => {
       setVibrationDuration(value);
       setVibrationInput(value.toString());
 
-      // Trigger vibration when value is saved
       if (value > 0) {
         Vibration.vibrate(value);
         console.log(`Vibrating for ${value}ms`);
@@ -66,14 +65,13 @@ const SettingsScreen = () => {
 
   return (
     <View className="flex-1 p-4 bg-[#023c69]">
-      {/* Back Button */}
+
       <TouchableOpacity className="p-2 mt-6" onPress={() => navigation.goBack()}>
         <Ionicons name="arrow-back" size={24} color="white" />
       </TouchableOpacity>
 
       <View className="items-center justify-center mt-20">
 
-        {/* FONT SIZE SETTINGS */}
         <View className="mt-6 w-full max-w-[300px]">
           <Text style={{ fontSize: fontSize, color: "white", fontWeight: "bold" }}>FONT SIZE</Text>
           <View className="flex-row justify-between items-center mt-1">
@@ -107,7 +105,6 @@ const SettingsScreen = () => {
           </TouchableOpacity>
         </View>
 
-        {/* VIBRATION DURATION SETTINGS */}
         <View className="mt-6 w-full max-w-[300px]">
           <Text style={{ fontSize: fontSize, color: "white", fontWeight: "bold" }}>VIBRATION DURATION (ms)</Text>
           <View className="flex-row justify-between items-center mt-1">
@@ -131,7 +128,7 @@ const SettingsScreen = () => {
               onSubmitEditing={() => saveVibrationDuration(Number(vibrationInput))}
             />
 
-            <TouchableOpacity onPress={() => saveVibrationDuration(Math.min(2000, vibrationDuration + 50))}>
+            <TouchableOpacity onPress={() => saveVibrationDuration(Math.min(2000, vibrationDuration + 100))}>
               <Ionicons name="add-circle-outline" size={24} color="white" />
             </TouchableOpacity>
           </View>

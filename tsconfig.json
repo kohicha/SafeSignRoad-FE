@@ -17,6 +17,7 @@
     "app/pages/Detector.jsx",
     "app/_layout.js",
     "app/pages/Instructions.js",
-    "app/pages/Settings.js"
+    "app/pages/Settings.js",
+    "nativewind-env.d.ts"
   ]
 }
