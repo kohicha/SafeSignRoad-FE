@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, Button, Alert, Platform, ActivityIndicator, TextInput, Vibration, ScrollView } from 'react-native';
+import { StyleSheet, Text, View, Button, Alert, Platform, ActivityIndicator, TextInput, Vibration, ScrollView, TouchableOpacity } from 'react-native';
+import { Ionicons } from "@expo/vector-icons";
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import * as Notifications from 'expo-notifications';
+import { useNavigation } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 Notifications.setNotificationHandler({
     handleNotification: async () => ({
@@ -23,6 +26,10 @@ export default function Detector() {
     const [serverIp, setServerIp] = useState('192.168.1.10'); // UPDATE THIS AS NEEDED
     const [serverUrl, setServerUrl] = useState(`http://${serverIp}:8000/classify/`);
     const [lastDetectionTime, setLastDetectionTime] = useState(null);
+    const navigation = useNavigation();
+    const [vibrationDuration, setVibrationDuration] = useState(500);
+    const [fontSize, setFontSize] = useState(14);
+    const [notificationPermission, setNotificationPermission] = useState(null);
 
     // Update server URL when IP changes
     useEffect(() => {
@@ -33,6 +40,48 @@ export default function Detector() {
     useEffect(() => {
         requestPermission();
         registerForPushNotificationsAsync();
+    }, []);
+
+    useEffect(() => {
+        const loadSettings = async () => {
+            try {
+                // Load vibration settings
+                const storedVibration = await AsyncStorage.getItem("vibrationDuration");
+                if (storedVibration !== null) {
+                    const parsedVibration = Number.parseInt(storedVibration, 10);
+                    setVibrationDuration(parsedVibration);
+                }
+
+                // Load font size settings
+                const storedFontSize = await AsyncStorage.getItem("fontSize");
+                if (storedFontSize !== null) {
+                    const parsedFontSize = Number.parseInt(storedFontSize, 10);
+                    setFontSize(parsedFontSize);
+                }
+            } catch (error) {
+                console.error("Error loading settings:", error);
+            }
+        };
+
+        loadSettings();
+    }, []);
+
+    useEffect(() => {
+        const requestNotificationPermissions = async () => {
+            const currentPermission = await Notifications.getPermissionsAsync();
+            setNotificationPermission(currentPermission);
+
+            if (currentPermission.status !== 'granted') {
+                const permissionResult = await Notifications.requestPermissionsAsync();
+                setNotificationPermission(permissionResult);
+
+                if (permissionResult.status !== 'granted') {
+                    Alert.alert('Permission Required', 'Push notification permission is needed for alerts.');
+                }
+            }
+        };
+
+        requestNotificationPermissions();
     }, []);
 
     const setupAudioMode = async () => {
@@ -50,7 +99,7 @@ export default function Detector() {
     const startNewRecording = async () => {
         if (recordingRef.current) {
             console.warn("Cleaning up previous recording...");
-            try { await recordingRef.current.stopAndUnloadAsync(); } catch {}
+            try { await recordingRef.current.stopAndUnloadAsync(); } catch { }
             recordingRef.current = null;
         }
         let newRecording = null;
@@ -127,7 +176,7 @@ export default function Detector() {
                 try {
                     const errJson = await response.json();
                     errTxt = errJson.detail || errTxt;
-                } catch {}
+                } catch { }
                 throw new Error(errTxt);
             }
             const results = await response.json();
@@ -155,7 +204,7 @@ export default function Detector() {
         setLastDetectionTime(now);
         console.log(`🚨 Critical Sound DETECTED by ML!`);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        Vibration.vibrate(500);
+        Vibration.vibrate(vibrationDuration);
         try {
             await Notifications.scheduleNotificationAsync({
                 content: {
@@ -168,6 +217,7 @@ export default function Detector() {
         } catch (e) {
             console.error("Failed to schedule push notification:", e);
         }
+        Vibration.vibrate(vibrationDuration);
     }
 
     async function registerForPushNotificationsAsync() {
@@ -253,62 +303,76 @@ export default function Detector() {
 
     const toggleListening = () => setIsListening(current => !current);
 
+    const dynamicStyles = {
+        title: { fontSize: fontSize + 8, fontWeight: 'bold', color: 'white', marginBottom: 10 },
+        label: { fontSize: fontSize + 2, color: 'white', marginBottom: 5 },
+        input: { borderWidth: 1, borderColor: 'gray', padding: 10, width: 250, borderRadius: 5, color: 'white', marginBottom: 10, fontSize },
+        status: { fontSize: fontSize + 2, color: 'white', marginBottom: 20 },
+        buttonText: { fontSize: fontSize + 2, fontWeight: 'bold', color: 'black' },
+        resultsTitle: { fontSize: fontSize + 4, fontWeight: 'bold', color: 'white', marginBottom: 10, textAlign: 'center' },
+        resultText: { fontSize: fontSize + 2, color: 'white' },
+        errorText: { color: 'red', fontSize: fontSize + 2 },
+    };
+
+
     return (
-        <ScrollView contentContainerStyle={styles.container}>
-            <Text style={styles.title}>SafeSignRoad PoC (Interval)</Text>
+        <ScrollView contentContainerStyle={styles.container} className='bg-[#023c69] h-full'>
+            <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+                <Ionicons name="arrow-back" size={24} color="white" />
+            </TouchableOpacity>
+            <View className='content' style={styles.content}>
+                <Text className='text-white font-bold' style={dynamicStyles.label}>SafeSignRoad PoC (Interval)</Text>
 
-            <Text style={styles.label}>Server IP:</Text>
-            <TextInput
-                style={styles.input}
-                value={serverIp}
-                onChangeText={setServerIp}
-                editable={!isListening}
-                keyboardType="numeric"
-            />
-
-            <Text style={styles.statusText}>Permission: {permissionResponse?.status ?? 'loading...'}</Text>
-            <Text style={styles.statusText}>Monitoring: {isListening ? 'ACTIVE' : 'OFF'}</Text>
-            <Text style={styles.statusText}>Recording: {isRecording ? 'Recording...' : 'Stopped'}</Text>
-            <Text style={styles.statusText}>API: {isUploading ? 'Classifying...' : 'Ready'}</Text>
-
-            <View style={styles.buttonContainer}>
-                <Button
-                    title={isListening ? "Stop Monitoring" : "Start Monitoring"}
-                    onPress={toggleListening}
-                    color={isListening ? "#F44336" : "#4CAF50"}
-                    disabled={permissionResponse?.status !== 'granted'}
+                <Text className='text-white font-bold' style={dynamicStyles.label}>Server IP:</Text>
+                <TextInput
+                    className='text-white font-bold'
+                    style={dynamicStyles.input}
+                    value={serverIp}
+                    onChangeText={setServerIp}
+                    editable={!isListening}
+                    keyboardType="numeric"
                 />
+
+                <Text className='text-white font-bold' style={dynamicStyles.label}>Permission: {permissionResponse?.status ?? 'loading...'}</Text>
+                <Text className='text-white font-bold' style={dynamicStyles.label}>Monitoring: {isListening ? 'ACTIVE' : 'OFF'}</Text>
+                <Text className='text-white font-bold' style={dynamicStyles.label}>Recording: {isRecording ? 'Recording...' : 'Stopped'}</Text>
+                <Text className='text-white font-bold' style={dynamicStyles.label}>API: {isUploading ? 'Classifying...' : 'Ready'}</Text>
+
+                <View style={styles.buttonContainer} className='my-2'>
+                    <Button
+                        title={isListening ? "Stop Monitoring" : "Start Monitoring"}
+                        onPress={toggleListening}
+                        color={isListening ? "#F44336" : "#4CAF50"}
+                        disabled={permissionResponse?.status !== 'granted'}
+                    />
+                </View>
+
+                {isUploading && <ActivityIndicator size="small" color="#0000ff" style={{ marginVertical: 5 }} />}
+                {lastError && <Text className='text-white font-bold' style={styles.errorText}>Last Error: {lastError}</Text>}
+
+                {lastClassification && (
+                    <View style={styles.resultsContainer}>
+                        <Text className='text-white font-bold' style={dynamicStyles.label}>Last Classification:</Text>
+                        {Object.keys(lastClassification)
+                            .filter(key => key !== 'error')
+                            .map((key) => (
+                                <Text className='text-white font-bold' style={styles.resultText} key={key}>
+                                    {key}: {lastClassification[key]}
+                                </Text>
+                            ))
+                        }
+                    </View>
+                )}
             </View>
 
-            {isUploading && <ActivityIndicator size="small" color="#0000ff" style={{ marginVertical: 5 }} />}
-            {lastError && <Text style={styles.errorText}>Last Error: {lastError}</Text>}
-
-            {lastClassification && (
-                <View style={styles.resultsContainer}>
-                    <Text style={styles.resultsTitle}>Last Classification:</Text>
-                    {Object.keys(lastClassification)
-                        .filter(key => key !== 'error')
-                        .map((key) => (
-                            <Text style={styles.resultText} key={key}>
-                                {key}: {lastClassification[key]}
-                            </Text>
-                        ))
-                    }
-                </View>
-            )}
         </ScrollView>
     );
 }
 
 const styles = StyleSheet.create({
-    container: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 20, backgroundColor: '#f0f0f0' },
-    title: { fontSize: 20, fontWeight: 'bold', marginBottom: 15 },
-    label: { color: '#333', fontSize: 12, marginTop: 10 },
-    input: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#ccc', padding: 10, width: '80%', marginVertical: 5, borderRadius: 5, textAlign: 'center' },
-    statusText: { fontSize: 14, marginVertical: 2 },
-    buttonContainer: { width: '80%', marginVertical: 20 },
-    resultsContainer: { marginTop: 15, padding: 10, backgroundColor: '#e9e9e9', borderRadius: 5, width: '90%', alignItems: 'center' },
-    resultsTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 5, textAlign: 'center' },
-    resultText: { fontSize: 14, textAlign: 'center' },
-    errorText: { color: 'red', marginTop: 10, width: '90%', textAlign: 'center', fontStyle: 'italic' },
+    container: { backgroundColor: '#023c69', padding: 20 },
+    backButton: { marginTop: 5, padding: 10 },
+    content: { alignItems: 'center', marginTop: 20 },
+    button: { backgroundColor: '#fbd713', padding: 15, borderRadius: 8, width: 250, alignItems: 'center', marginBottom: 10 },
+    resultsContainer: { marginTop: 20, padding: 15, borderWidth: 1, borderColor: 'gray', borderRadius: 5, width: '90%' },
 });
